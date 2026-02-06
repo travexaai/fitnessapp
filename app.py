@@ -3,76 +3,81 @@ import pandas as pd
 import datetime
 import os
 
-# --- DATEI-EINSTELLUNGEN ---
+# --- DATEI-LOGIK ---
 DATA_FILE = "training_data.csv"
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE, parse_dates=['Datum'])
-    return pd.DataFrame(columns=['Datum', 'Übung', 'Gewicht', 'Wiederholungen'])
+        df = pd.read_csv(DATA_FILE)
+        df['Datum'] = pd.to_datetime(df['Datum']).dt.date
+        return df
+    return pd.DataFrame(columns=['Datum', 'Workout_Name', 'Übung', 'Gewicht', 'Wiederholungen'])
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
 # --- APP CONFIG ---
-st.set_page_config(page_title="Fitness Tracker", layout="centered")
+st.set_page_config(page_title="Fitness Tracker", layout="centered", initial_sidebar_state="collapsed")
 
-# Daten beim Start laden
+# CSS um das Seitenmenü für User fast "unsichtbar" zu machen
+st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;}</style>", unsafe_allow_html=True)
+
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
-# --- NAVIGATION ---
-menu = ["📈 Dashboard", "🏋️ Training"]
-choice = st.sidebar.selectbox("Menü", menu)
+# --- NAVIGATION OBEN ---
+tab1, tab2 = st.tabs(["📈 Fortschritt", "🏋️ Training"])
 
-# --- DASHBOARD ---
-if choice == "📈 Dashboard":
+# --- TAB 1: DASHBOARD ---
+with tab1:
     st.title("Dein Fortschritt")
-    
     if st.session_state.df.empty:
-        st.info("Noch keine Daten vorhanden. Geh zum Training-Tab!")
+        st.info("Noch keine Daten vorhanden.")
     else:
         df = st.session_state.df
-        # Volumen berechnen (Gewicht * Wiederholungen)
         df['Volumen'] = df['Gewicht'] * df['Wiederholungen']
-        
-        # Grafik anzeigen (Fortschritt über die Zeit)
-        st.subheader("Gesamtvolumen Entwicklung")
         chart_data = df.groupby('Datum')['Volumen'].sum().reset_index()
         st.line_chart(chart_data.set_index('Datum'))
-        
-        # Letzte Einträge
-        st.subheader("Letzte Einheiten")
-        st.dataframe(df.sort_values(by='Datum', ascending=False).head(5))
 
-# --- TRAINING ---
-elif choice == "🏋️ Training":
-    st.title("Neues Training")
-
-    with st.form("training_form", clear_on_submit=True):
-        date = st.date_input("Datum", datetime.date.today())
-        exercise = st.text_input("Übung (z.B. Kniebeugen)")
-        weight = st.number_input("Gewicht (kg)", min_value=0.0, step=2.5)
-        reps = st.number_input("Wiederholungen", min_value=0, step=1)
+# --- TAB 2: TRAINING ---
+with tab2:
+    st.title("Trainings-Planer")
+    
+    # 1. Kalender-Auswahl
+    selected_date = st.date_input("Wähle einen Tag:", datetime.date.today())
+    
+    # Checken, ob für diesen Tag schon ein Training existiert
+    day_data = st.session_state.df[st.session_state.df['Datum'] == selected_date]
+    
+    if day_data.empty:
+        st.warning(f"Kein Training am {selected_date}")
+        workout_name = st.text_input("Wie soll das Training heißen?", placeholder="z.B. Leg Day")
         
-        submit = st.form_submit_button("Eintragen")
-        
-        if submit:
-            if exercise:
-                new_entry = pd.DataFrame([[pd.to_datetime(date), exercise, weight, reps]], 
-                                         columns=['Datum', 'Übung', 'Gewicht', 'Wiederholungen'])
-                st.session_state.df = pd.concat([st.session_state.df, new_entry], ignore_index=True)
-                save_data(st.session_state.df)
-                st.success(f"{exercise} gespeichert!")
+        if st.button("Training für diesen Tag anlegen"):
+            if workout_name:
+                # Initialer Dummy-Eintrag oder einfach Start-Signal
+                st.success(f"Training '{workout_name}' erstellt! Füge jetzt Übungen hinzu.")
+                st.session_state['current_workout'] = workout_name
             else:
-                st.error("Bitte gib einen Namen für die Übung ein.")
-
-    # Detail-Ansicht
-    st.divider()
-    st.subheader("Übungshistorie")
-    if not st.session_state.df.empty:
-        exercises = st.session_state.df['Übung'].unique()
-        selected_ex = st.selectbox("Wähle eine Übung aus, um Details zu sehen:", exercises)
+                st.error("Bitte gib einen Namen ein.")
+    else:
+        workout_name = day_data['Workout_Name'].iloc[0]
+        st.success(f"Heute: **{workout_name}**")
         
-        history = st.session_state.df[st.session_state.df['Übung'] == selected_ex]
-        st.table(history.sort_values(by='Datum', ascending=False))
+        # 2. Übungen anzeigen/hinzufügen
+        with st.expander("➕ Übung hinzufügen"):
+            with st.form("add_exercise", clear_on_submit=True):
+                ex_name = st.text_input("Übung")
+                w = st.number_input("Gewicht (kg)", step=2.5)
+                r = st.number_input("Reps", step=1)
+                if st.form_submit_button("Speichern"):
+                    new_row = pd.DataFrame([[selected_date, workout_name, ex_name, w, r]], 
+                                          columns=st.session_state.df.columns)
+                    st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
+                    save_data(st.session_state.df)
+                    st.rerun()
+
+        # 3. Liste der bereits gemachten Übungen an diesem Tag
+        st.subheader("Heutige Übungen")
+        for i, row in day_data.iterrows():
+            st.write(f"**{row['Übung']}**: {row['Gewicht']}kg x {row['Wiederholungen']}")
